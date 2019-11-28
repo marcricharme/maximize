@@ -34,6 +34,22 @@ function fetch(src) {
     case 'https:':
       https.get(src, this.ok).on('error', this);
       break;
+    case 'data:':
+      var regex = /^data:.+\/(.+);base64,(.*)$/;
+      var matches = src.match(regex);
+      var data = matches[2];
+      var buffer = new Buffer(data, 'base64');
+      // Fake XHR response for inline data URLs
+      this.ok({
+        statusCode: 200,
+        on: (what,cb) => {
+          if(what == 'data')
+            cb(buffer);
+          if(what == 'end')
+            cb();
+        },
+      })
+      break;
     default:
       console.error('Bad URL: URL must be an HTTP(S) resource');
       process.exit(-1);
@@ -91,18 +107,22 @@ Seq()
 
     var srcmap = info[1];
     var srcmapUri = url.parse(srcmap);
-    var srcUri = url.parse(args.url[0]);
 
-    if (!srcmapUri.protocol) {
-      srcmapUri.protocol = srcUri.protocol;
-      srcmapUri.auth = srcUri.auth;
-      srcmapUri.host = srcUri.host;
+    if(srcmapUri.protocol != 'data:') {
+      var srcUri = url.parse(args.url[0]);
+      if (!srcmapUri.protocol) {
+        srcmapUri.protocol = srcUri.protocol;
+        srcmapUri.auth = srcUri.auth;
+        srcmapUri.host = srcUri.host;
+      }
+
+      if (srcmap[0] !== '/')
+        srcmapUri.pathname = srcUri.pathname.slice(0, srcUri.pathname.lastIndexOf('/') + 1) + srcmap;
+
+      srcmap = url.format(srcmapUri);
     }
 
-    if (srcmap[0] !== '/')
-      srcmapUri.pathname = srcUri.pathname.slice(0, srcUri.pathname.lastIndexOf('/') + 1) + srcmap;
-
-    this.ok(url.format(srcmapUri));
+    this.ok(srcmap);
   })
   .seq('fetch_map', fetch)
   .seq('map', function(res) {
@@ -120,8 +140,12 @@ Seq()
     });
 
     res.on('end', function() {
-      self.ok(new sourceMap.SourceMapConsumer(Buffer.concat(data).toString()));
 
+      sourceMap.SourceMapConsumer.with(
+        Buffer.concat(data).toString(),
+        null,
+        consumer => self.ok(consumer)
+      );
       ended = true;
     });
 
